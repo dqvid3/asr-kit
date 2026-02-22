@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=43", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asr-kit"
+version = "0.1.0"
+description = "Modular Python ASR library with pluggable model drivers."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+qwen = ["qwen-asr", "torch"]
+whisper = ["openai-whisper", "torch"]
+dev = ["ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

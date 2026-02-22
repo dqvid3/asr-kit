@@ -1,0 +1,19 @@
+# IDEs & System
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+.env.*
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Dev cache
+.ruff_cache/
