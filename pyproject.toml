@@ -9,7 +9,7 @@ description = "Modular Python ASR library with pluggable model drivers."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["yaspin"]
 
 [project.optional-dependencies]
 qwen = ["qwen-asr", "torch"]

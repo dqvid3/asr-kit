@@ -2,6 +2,8 @@
 
 import os
 
+from yaspin import yaspin
+
 from asr_kit.drivers.base import BaseDriver
 from asr_kit.exceptions import ModelLoadError, ModelNotLoadedError
 from asr_kit.types import TranscriptionResult, WordTimestamp
@@ -122,12 +124,14 @@ class QwenDriver(BaseDriver):
         if missing:
             raise FileNotFoundError(f"Audio file(s) not found: {missing}")
 
-        raw = self._model.transcribe(
-            audio=audio_paths,
-            language=language,
-            return_time_stamps=return_timestamps,
-            **kwargs,
-        )
+        with yaspin(text=f"Transcribing {len(audio_paths)} file(s)...") as sp:
+            raw = self._model.transcribe(
+                audio=audio_paths,
+                language=language,
+                return_time_stamps=return_timestamps,
+                **kwargs,
+            )
+            sp.ok("✔")
 
         results: list[TranscriptionResult] = []
         for path, item in zip(audio_paths, raw):
