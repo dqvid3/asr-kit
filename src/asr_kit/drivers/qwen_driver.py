@@ -47,6 +47,7 @@ class QwenDriver(BaseDriver):
         use_forced_aligner: bool = False,
         aligner_model_id: str = _DEFAULT_ALIGNER_ID,
         max_inference_batch_size: int = 8,
+        use_flash_attention: bool = False,
         **kwargs,
     ) -> None:
         """Load and cache the Qwen3-ASR model.
@@ -61,6 +62,8 @@ class QwenDriver(BaseDriver):
                 Italian, Japanese, Korean, Portuguese, Russian, Spanish.
             aligner_model_id: Forced aligner model ID (default: Qwen/Qwen3-ForcedAligner-0.6B).
             max_inference_batch_size: Batch size for inference.
+            use_flash_attention: Whether to use Flash Attention 2 (requires flash-attn pip package 
+                and Ampere+ GPU like RTX 6000 Ada). Tremendously reduces VRAM and speeds up long audio.
             **kwargs: Passed through to Qwen3ASRModel.from_pretrained().
 
         Raises:
@@ -90,6 +93,10 @@ class QwenDriver(BaseDriver):
                 max_inference_batch_size=max_inference_batch_size,
                 **kwargs,
             )
+            
+            if use_flash_attention:
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+
             if use_forced_aligner:
                 load_kwargs["forced_aligner"] = aligner_model_id
                 load_kwargs["forced_aligner_kwargs"] = dict(dtype=dtype, device_map=device)
@@ -109,7 +116,6 @@ class QwenDriver(BaseDriver):
         context: str | list[str] = "",
         return_timestamps: bool = False,
         on_result: "Callable[[TranscriptionResult], None] | None" = None,
-        **kwargs,
     ) -> list[TranscriptionResult]:
         """Transcribe one or more WAV files with Qwen3-ASR.
 
@@ -130,7 +136,6 @@ class QwenDriver(BaseDriver):
             on_result: Optional callback function triggered immediately after each individual
                 file in a batch is transcribed. Receives a TranscriptionResult object.
                 Useful for progressive saving.
-            **kwargs: Passed through to model.transcribe().
 
         Returns:
             One TranscriptionResult per input path, in the same order.
@@ -172,7 +177,6 @@ class QwenDriver(BaseDriver):
                         context=chunk_ctx,
                         language=chunk_lang,
                         return_time_stamps=return_timestamps,
-                        **kwargs,
                     )
                 
                 for path, item in zip(chunk_paths, raw_chunk):

@@ -14,6 +14,12 @@ conda activate asr-kit
 # 2. Install directly from GitHub
 pip install "asr-kit[qwen] @ git+https://github.com/dqvid3/asr-kit.git"
 
+# 3. (Optional - Qwen only) Install Flash Attention 2 for Ampere+ GPUs (RTX 3090/4090/ADA/A100)
+# Significantly reduces VRAM and speeds up long audio processing when using the Qwen model.
+# If your machine has less than 96GB of RAM and lots of CPU cores, run:
+# MAX_JOBS=4 pip install -U flash-attn --no-build-isolation
+pip install -U flash-attn --no-build-isolation
+
 # To remove the environment later
 conda env remove -n asr-kit
 ```
