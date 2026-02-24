@@ -1,6 +1,9 @@
 """Qwen3-ASR driver for ASR-Kit."""
 
+import contextlib
+import io
 import os
+from typing import Callable
 
 from yaspin import yaspin
 
@@ -30,6 +33,7 @@ class QwenDriver(BaseDriver):
         self._model = None
         self._model_id: str = ""
         self._aligner_loaded = False
+        self._batch_size: int = 8
 
     @property
     def supports_timestamps(self) -> bool:
@@ -64,7 +68,11 @@ class QwenDriver(BaseDriver):
         """
         try:
             import torch  # type: ignore[import]
+            import transformers  # type: ignore[import]
             from qwen_asr import Qwen3ASRModel  # type: ignore[import]
+
+            # Suppress chatty transformers info/warning logs that break the terminal UI
+            transformers.logging.set_verbosity_error()
 
             if device == "auto":
                 if torch.cuda.is_available():
@@ -89,6 +97,7 @@ class QwenDriver(BaseDriver):
             self._model = Qwen3ASRModel.from_pretrained(model_id, **load_kwargs)
             self._model_id = model_id
             self._aligner_loaded = use_forced_aligner
+            self._batch_size = max_inference_batch_size
         except Exception as exc:
             raise ModelLoadError(f"Failed to load {model_id}: {exc}") from exc
 
@@ -98,9 +107,13 @@ class QwenDriver(BaseDriver):
         *,
         language: str | list[str] | None = None,
         return_timestamps: bool = False,
+        on_result: "Callable[[TranscriptionResult], None] | None" = None,
         **kwargs,
     ) -> list[TranscriptionResult]:
         """Transcribe one or more WAV files with Qwen3-ASR.
+
+        Processes files in batches (based on load_model's batch_size) to provide real-time
+        progress updates and support intermediate result callbacks.
 
         Args:
             audio_paths: Absolute paths to WAV files.
@@ -108,6 +121,9 @@ class QwenDriver(BaseDriver):
                 Pass a list to set a different language per file. None for auto-detect.
             return_timestamps: Include word-level timestamps. Requires use_forced_aligner=True
                 at load_model() time and a supported language.
+            on_result: Optional callback function triggered immediately after each individual
+                file in a batch is transcribed. Receives a TranscriptionResult object.
+                Useful for progressive saving.
             **kwargs: Passed through to model.transcribe().
 
         Returns:
@@ -124,31 +140,51 @@ class QwenDriver(BaseDriver):
         if missing:
             raise FileNotFoundError(f"Audio file(s) not found: {missing}")
 
-        with yaspin(text=f"Transcribing {len(audio_paths)} file(s)...") as sp:
-            raw = self._model.transcribe(
-                audio=audio_paths,
-                language=language,
-                return_time_stamps=return_timestamps,
-                **kwargs,
-            )
-            sp.ok("✔")
-
         results: list[TranscriptionResult] = []
-        for path, item in zip(audio_paths, raw):
-            timestamps: list[WordTimestamp] | None = None
-            if return_timestamps and item.time_stamps:
-                timestamps = [
-                    WordTimestamp(text=ts.text, start=ts.start_time, end=ts.end_time)
-                    for ts in item.time_stamps
-                ]
-            results.append(
-                TranscriptionResult(
-                    text=item.text,
-                    audio_path=path,
-                    model=self._model_id,
-                    language=item.language,
-                    timestamps=timestamps,
-                )
-            )
+        total = len(audio_paths)
+        
+        # We process in chunks to allow progress updates and callbacks.
+        batch_size = self._batch_size
+
+        with yaspin(text=f"Transcribing [0/{total}]...") as sp:
+            for i in range(0, total, batch_size):
+                chunk_paths = audio_paths[i : i + batch_size]
+                
+                # Handle language list per chunk
+                chunk_lang = language
+                if isinstance(language, list):
+                    chunk_lang = language[i : i + batch_size]
+
+                with contextlib.redirect_stderr(io.StringIO()):
+                    raw_chunk = self._model.transcribe(
+                        audio=chunk_paths,
+                        language=chunk_lang,
+                        return_time_stamps=return_timestamps,
+                        **kwargs,
+                    )
+                
+                for path, item in zip(chunk_paths, raw_chunk):
+                    timestamps: list[WordTimestamp] | None = None
+                    if return_timestamps and item.time_stamps:
+                        timestamps = [
+                            WordTimestamp(text=ts.text, start=ts.start_time, end=ts.end_time)
+                            for ts in item.time_stamps
+                        ]
+                    
+                    res = TranscriptionResult(
+                        text=item.text,
+                        audio_path=path,
+                        model=self._model_id,
+                        language=item.language,
+                        timestamps=timestamps,
+                    )
+                    
+                    results.append(res)
+                    if on_result:
+                        on_result(res)
+                
+                sp.text = f"Transcribing [{min(i + len(chunk_paths), total)}/{total}]..."
+            
+            sp.ok("✔")
 
         return results
