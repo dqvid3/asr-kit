@@ -106,6 +106,7 @@ class QwenDriver(BaseDriver):
         audio_paths: list[str],
         *,
         language: str | list[str] | None = None,
+        context: str | list[str] = "",
         return_timestamps: bool = False,
         on_result: "Callable[[TranscriptionResult], None] | None" = None,
         **kwargs,
@@ -119,6 +120,11 @@ class QwenDriver(BaseDriver):
             audio_paths: Absolute paths to WAV files.
             language: Language name(s) as expected by Qwen (e.g. "English", "Italian").
                 Pass a list to set a different language per file. None for auto-detect.
+            context: Optional context string(s) to bias the model toward recognising
+                specific terms or domains. Can be keywords (e.g. "PostgreSQL, Kubernetes")
+                or a descriptive sentence (e.g. "This is a recording of a technical
+                interview."). Injected as the system prompt.
+                Pass a list to set different context per file.
             return_timestamps: Include word-level timestamps. Requires use_forced_aligner=True
                 at load_model() time and a supported language.
             on_result: Optional callback function triggered immediately after each individual
@@ -155,9 +161,15 @@ class QwenDriver(BaseDriver):
                 if isinstance(language, list):
                     chunk_lang = language[i : i + batch_size]
 
+                # Handle context list per chunk
+                chunk_ctx = context
+                if isinstance(context, list):
+                    chunk_ctx = context[i : i + batch_size]
+
                 with contextlib.redirect_stderr(io.StringIO()):
                     raw_chunk = self._model.transcribe(
                         audio=chunk_paths,
+                        context=chunk_ctx,
                         language=chunk_lang,
                         return_time_stamps=return_timestamps,
                         **kwargs,
