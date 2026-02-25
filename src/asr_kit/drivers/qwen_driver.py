@@ -33,7 +33,7 @@ class QwenDriver(BaseDriver):
         self._model = None
         self._model_id: str = ""
         self._aligner_loaded = False
-        self._batch_size: int = 8
+        self._batch_size: int = 4
 
     @property
     def supports_timestamps(self) -> bool:
@@ -46,6 +46,7 @@ class QwenDriver(BaseDriver):
         device: str = "auto",
         use_forced_aligner: bool = False,
         aligner_model_id: str = _DEFAULT_ALIGNER_ID,
+        batch_size: int = 4,
         max_inference_batch_size: int = 8,
         use_flash_attention: bool = False,
         **kwargs,
@@ -61,7 +62,10 @@ class QwenDriver(BaseDriver):
                 Aligner supports 11 languages: English, Chinese, Cantonese, French, German,
                 Italian, Japanese, Korean, Portuguese, Russian, Spanish.
             aligner_model_id: Forced aligner model ID (default: Qwen/Qwen3-ForcedAligner-0.6B).
-            max_inference_batch_size: Batch size for inference.
+            batch_size: Number of audio files passed to the model at once for progress reporting.
+            max_inference_batch_size: GPU batch size for simultaneous inference. Qwen processes entire 
+                audios directly without sliding windows (up to 20 minutes for normal transcription, 
+                or 3 minutes if `return_timestamps=True`). Smaller values prevent VRAM Out-of-Memory.
             use_flash_attention: Whether to use Flash Attention 2 (requires flash-attn pip package 
                 and Ampere+ GPU like RTX 6000 Ada). Tremendously reduces VRAM and speeds up long audio.
             **kwargs: Passed through to Qwen3ASRModel.from_pretrained().
@@ -104,7 +108,7 @@ class QwenDriver(BaseDriver):
             self._model = Qwen3ASRModel.from_pretrained(model_id, **load_kwargs)
             self._model_id = model_id
             self._aligner_loaded = use_forced_aligner
-            self._batch_size = max_inference_batch_size
+            self._batch_size = batch_size
         except Exception as exc:
             raise ModelLoadError(f"Failed to load {model_id}: {exc}") from exc
 
