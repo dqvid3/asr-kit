@@ -2,10 +2,6 @@
 
 import contextlib
 import io
-import os
-from typing import Callable
-
-from yaspin import yaspin
 
 from asr_kit.drivers.base import BaseDriver
 from asr_kit.exceptions import ModelLoadError, ModelNotLoadedError
@@ -22,11 +18,6 @@ class QwenDriver(BaseDriver):
     Word-level timestamps require use_forced_aligner=True at load time and
     a language supported by the aligner (English, Chinese, Cantonese, French, German,
     Italian, Japanese, Korean, Portuguese, Russian, Spanish).
-
-    Example:
-        driver = QwenDriver()
-        driver.load_model(device="cuda", use_forced_aligner=True)
-        results = driver.transcribe(["audio.wav"], language="English", return_timestamps=True)
     """
 
     def __init__(self) -> None:
@@ -36,7 +27,13 @@ class QwenDriver(BaseDriver):
         self._batch_size: int = 4
 
     @property
+    def batch_size(self) -> int:
+        """The batch size used for inference."""
+        return self._batch_size
+
+    @property
     def supports_timestamps(self) -> bool:
+        """Whether word-level timestamps are supported."""
         return self._aligner_loaded
 
     def load_model(
@@ -44,41 +41,36 @@ class QwenDriver(BaseDriver):
         *,
         model_id: str = _DEFAULT_MODEL_ID,
         device: str = "auto",
+        dtype: str | None = None,
         use_forced_aligner: bool = False,
         aligner_model_id: str = _DEFAULT_ALIGNER_ID,
         batch_size: int = 4,
         max_inference_batch_size: int = 8,
+        max_new_tokens: int | None = None,
         use_flash_attention: bool = False,
+        token: str | None = None,
         **kwargs,
     ) -> None:
         """Load and cache the Qwen3-ASR model.
 
         Args:
-            model_id: HuggingFace model ID. Options: "Qwen/Qwen3-ASR-1.7B" (default),
-                "Qwen/Qwen3-ASR-0.6B".
-            device: Torch device map string (e.g. "cuda", "cuda:0", "cpu", "mps"). "auto" picks
-                cuda → mps → cpu.
-            use_forced_aligner: Load the forced aligner for word-level timestamps.
-                Aligner supports 11 languages: English, Chinese, Cantonese, French, German,
-                Italian, Japanese, Korean, Portuguese, Russian, Spanish.
-            aligner_model_id: Forced aligner model ID (default: Qwen/Qwen3-ForcedAligner-0.6B).
-            batch_size: Number of audio files passed to the model at once for progress reporting.
-            max_inference_batch_size: GPU batch size for simultaneous inference. Qwen processes entire 
-                audios directly without sliding windows (up to 20 minutes for normal transcription, 
-                or 3 minutes if `return_timestamps=True`). Smaller values prevent VRAM Out-of-Memory.
-            use_flash_attention: Whether to use Flash Attention 2 (requires flash-attn pip package 
-                and Ampere+ GPU like RTX 6000 Ada). Tremendously reduces VRAM and speeds up long audio.
-            **kwargs: Passed through to Qwen3ASRModel.from_pretrained().
-
-        Raises:
-            ModelLoadError: If the model cannot be loaded.
+            model_id: HuggingFace model ID.
+            device: Torch device map string.
+            dtype: Torch dtype (e.g. 'float16', 'bfloat16', 'float32'). Defaults to bfloat16 on GPU.
+            use_forced_aligner: Load aligner for timestamps.
+            aligner_model_id: Aligner model ID.
+            batch_size: Progress reporting chunk size.
+            max_inference_batch_size: GPU batch size.
+            max_new_tokens: Max tokens to generate (None uses library default).
+            use_flash_attention: Use Flash Attention 2.
+            token: HuggingFace API token.
+            **kwargs: Passed to from_pretrained.
         """
         try:
-            import torch  # type: ignore[import]
-            import transformers  # type: ignore[import]
-            from qwen_asr import Qwen3ASRModel  # type: ignore[import]
+            import torch
+            import transformers
+            from qwen_asr import Qwen3ASRModel
 
-            # Suppress chatty transformers info/warning logs that break the terminal UI
             transformers.logging.set_verbosity_error()
 
             if device == "auto":
@@ -89,21 +81,30 @@ class QwenDriver(BaseDriver):
                 else:
                     device = "cpu"
 
-            dtype = torch.bfloat16 if device != "cpu" else torch.float32
+            if dtype is None:
+                torch_dtype = torch.bfloat16 if device != "cpu" else torch.float32
+            elif isinstance(dtype, str):
+                torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else dtype
+            else:
+                torch_dtype = dtype
 
             load_kwargs: dict = dict(
-                dtype=dtype,
+                dtype=torch_dtype,
                 device_map=device,
                 max_inference_batch_size=max_inference_batch_size,
+                token=token,
                 **kwargs,
             )
+            
+            if max_new_tokens is not None:
+                load_kwargs["max_new_tokens"] = max_new_tokens
             
             if use_flash_attention:
                 load_kwargs["attn_implementation"] = "flash_attention_2"
 
             if use_forced_aligner:
                 load_kwargs["forced_aligner"] = aligner_model_id
-                load_kwargs["forced_aligner_kwargs"] = dict(dtype=dtype, device_map=device)
+                load_kwargs["forced_aligner_kwargs"] = dict(dtype=torch_dtype, device_map=device, token=token)
 
             self._model = Qwen3ASRModel.from_pretrained(model_id, **load_kwargs)
             self._model_id = model_id
@@ -119,92 +120,39 @@ class QwenDriver(BaseDriver):
         language: str | list[str] | None = None,
         context: str | list[str] = "",
         return_timestamps: bool = False,
-        on_result: "Callable[[TranscriptionResult], None] | None" = None,
+        **kwargs,
     ) -> list[TranscriptionResult]:
-        """Transcribe one or more WAV files with Qwen3-ASR.
-
-        Processes files in batches (based on load_model's batch_size) to provide real-time
-        progress updates and support intermediate result callbacks.
-
-        Args:
-            audio_paths: Absolute paths to WAV files.
-            language: Language name(s) as expected by Qwen (e.g. "English", "Italian").
-                Pass a list to set a different language per file. None for auto-detect.
-            context: Optional context string(s) to bias the model toward recognising
-                specific terms or domains. Can be keywords (e.g. "PostgreSQL, Kubernetes")
-                or a descriptive sentence (e.g. "This is a recording of a technical
-                interview."). Injected as the system prompt.
-                Pass a list to set different context per file.
-            return_timestamps: Include word-level timestamps. Requires use_forced_aligner=True
-                at load_model() time and a supported language.
-            on_result: Optional callback function triggered immediately after each individual
-                file in a batch is transcribed. Receives a TranscriptionResult object.
-                Useful for progressive saving.
-
-        Returns:
-            One TranscriptionResult per input path, in the same order.
-
-        Raises:
-            ModelNotLoadedError: If load_model() has not been called.
-            FileNotFoundError: If any audio path does not exist.
-        """
+        """Transcribe a chunk of audio files with Qwen3-ASR."""
         if self._model is None:
             raise ModelNotLoadedError("Call load_model() before transcribe().")
 
-        missing = [p for p in audio_paths if not os.path.isfile(p)]
-        if missing:
-            raise FileNotFoundError(f"Audio file(s) not found: {missing}")
-
         results: list[TranscriptionResult] = []
-        total = len(audio_paths)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            # Qwen's transcribe method internally handles batching and audio loading.
+            raw_chunk = self._model.transcribe(
+                audio=audio_paths,
+                context=context,
+                language=language,
+                return_time_stamps=return_timestamps,
+                **kwargs,
+            )
         
-        # We process in chunks to allow progress updates and callbacks.
-        batch_size = self._batch_size
-
-        with yaspin(text=f"Transcribing [0/{total}]...") as sp:
-            for i in range(0, total, batch_size):
-                chunk_paths = audio_paths[i : i + batch_size]
-                
-                # Handle language list per chunk
-                chunk_lang = language
-                if isinstance(language, list):
-                    chunk_lang = language[i : i + batch_size]
-
-                # Handle context list per chunk
-                chunk_ctx = context
-                if isinstance(context, list):
-                    chunk_ctx = context[i : i + batch_size]
-
-                with contextlib.redirect_stderr(io.StringIO()):
-                    raw_chunk = self._model.transcribe(
-                        audio=chunk_paths,
-                        context=chunk_ctx,
-                        language=chunk_lang,
-                        return_time_stamps=return_timestamps,
-                    )
-                
-                for path, item in zip(chunk_paths, raw_chunk):
-                    timestamps: list[WordTimestamp] | None = None
-                    if return_timestamps and item.time_stamps:
-                        timestamps = [
-                            WordTimestamp(text=ts.text, start=ts.start_time, end=ts.end_time)
-                            for ts in item.time_stamps
-                        ]
-                    
-                    res = TranscriptionResult(
-                        text=item.text,
-                        audio_path=path,
-                        model=self._model_id,
-                        language=item.language,
-                        timestamps=timestamps,
-                    )
-                    
-                    results.append(res)
-                    if on_result:
-                        on_result(res)
-                
-                sp.text = f"Transcribing [{min(i + len(chunk_paths), total)}/{total}]..."
+        for path, item in zip(audio_paths, raw_chunk):
+            timestamps: list[WordTimestamp] | None = None
+            if return_timestamps and item.time_stamps:
+                timestamps = [
+                    WordTimestamp(text=ts.text, start=ts.start_time, end=ts.end_time)
+                    for ts in item.time_stamps
+                ]
             
-            sp.ok("✔")
+            res = TranscriptionResult(
+                text=item.text,
+                audio_path=path,
+                model=self._model_id,
+                language=item.language,
+                timestamps=timestamps,
+            )
+            results.append(res)
 
         return results

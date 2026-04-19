@@ -2,14 +2,24 @@
 
 import importlib
 import os
+from typing import Callable
+
+from yaspin import yaspin
 
 from asr_kit.drivers.base import BaseDriver
 from asr_kit.exceptions import UnsupportedModelError
 from asr_kit.types import TranscriptionResult
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Maps model key → (module path, class name). Only the requested driver is imported.
 _DRIVER_REGISTRY: dict[str, tuple[str, str]] = {
     "qwen": ("asr_kit.drivers.qwen_driver", "QwenDriver"),
+    "cohere": ("asr_kit.drivers.cohere_driver", "CohereDriver"),
     # "whisper": ("asr_kit.drivers.whisper_driver", "WhisperDriver"),
     # "parakeet": ("asr_kit.drivers.parakeet_driver", "ParakeetDriver"),
 }
@@ -30,7 +40,7 @@ class Transcriber:
         """Initialise and load the requested model driver.
 
         Args:
-            model: Model key. Supported: "qwen".
+            model: Model key. Supported: "qwen", "cohere".
             **load_kwargs: Passed to the driver's load_model() (device, batch_size, etc.).
 
         Raises:
@@ -53,12 +63,16 @@ class Transcriber:
     def transcribe(
         self,
         audio: str | list[str],
+        on_result: Callable[[TranscriptionResult], None] | None = None,
+        show_progress: bool = True,
         **kwargs,
     ) -> TranscriptionResult | list[TranscriptionResult]:
         """Transcribe one or more WAV files.
 
         Args:
             audio: A single WAV path or a list of WAV paths (absolute or relative).
+            on_result: Optional callback triggered after each individual file is transcribed.
+            show_progress: Whether to show a progress spinner in the terminal.
             **kwargs: Passed to the driver (language, return_timestamps, etc.).
 
         Returns:
@@ -77,7 +91,55 @@ class Transcriber:
 
         single = isinstance(audio, str)
         paths = [audio] if single else list(audio)
-        paths = [os.path.abspath(p) for p in paths]
+        if not paths:
+            raise ValueError("audio must contain at least one file path.")
 
-        results = self._driver.transcribe(paths, **kwargs)
-        return results[0] if single else results
+        paths = [os.path.abspath(p) for p in paths]
+        for path in paths:
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"Audio file not found: {path}")
+
+        total = len(paths)
+        batch_size = self._driver.batch_size
+        all_results: list[TranscriptionResult] = []
+
+        # Context manager for the spinner
+        if show_progress:
+            sp = yaspin(text=f"Transcribing [0/{total}]...")
+            sp.start()
+        else:
+            sp = None
+
+        try:
+            for i in range(0, total, batch_size):
+                chunk_paths = paths[i : i + batch_size]
+                
+                # Split any list-based kwargs to match the current chunk
+                chunk_kwargs = {}
+                for k, v in kwargs.items():
+                    if isinstance(v, list) and len(v) == total:
+                        chunk_kwargs[k] = v[i : i + batch_size]
+                    else:
+                        chunk_kwargs[k] = v
+
+                chunk_results = self._driver.transcribe(chunk_paths, **chunk_kwargs)
+                
+                for res in chunk_results:
+                    all_results.append(res)
+                    if on_result:
+                        on_result(res)
+                
+                if sp:
+                    sp.text = f"Transcribing [{min(i + len(chunk_paths), total)}/{total}]..."
+            
+            if sp:
+                sp.ok("✔")
+        except Exception:
+            if sp:
+                sp.fail("✘")
+            raise
+        finally:
+            if sp:
+                sp.stop()
+
+        return all_results[0] if single else all_results

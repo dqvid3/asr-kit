@@ -12,6 +12,11 @@ class BaseDriver(ABC):
     """
 
     @property
+    @abstractmethod
+    def batch_size(self) -> int:
+        """The number of audio files this driver can process in one batch."""
+
+    @property
     def supports_timestamps(self) -> bool:
         """Whether this driver supports word-level timestamps.
 
