@@ -13,6 +13,13 @@ Modular Python library for Automatic Speech Recognition. Pass WAV(s) to a unifie
 MODEL_KEY=cohere
 conda create -n asr-${MODEL_KEY} python=3.12
 conda activate asr-${MODEL_KEY}
+
+# Optional (NVIDIA GPU): install a CUDA-enabled PyTorch build first.
+# Use a runtime build published by PyTorch (for example cu124),
+# not necessarily your exact driver version.
+# Recommended (pip wheel):
+# pip install torch --index-url https://download.pytorch.org/whl/cu124
+
 pip install "asr-kit[${MODEL_KEY}] @ git+https://github.com/dqvid3/asr-kit.git"
 
 # Optional (Qwen only, Ampere+ GPUs):
@@ -22,6 +29,11 @@ pip install -U flash-attn --no-build-isolation
 Available model keys right now:
 - `cohere`
 - `qwen`
+
+Notes:
+- The same install pattern works for new backends as they are added: set `MODEL_KEY` to the backend name.
+- If you switch backend models, prefer a separate environment per model key.
+- Verify GPU setup with: `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"`.
 
 ## Usage
 
@@ -38,12 +50,16 @@ print(result.text)
 
 # Multiple files → list[TranscriptionResult] with progress spinner
 # Cohere uses ISO codes (e.g. "en", "it", "fr") and supports a punctuation toggle
-results = t.transcribe(["a.wav", "b.wav"], language="en", punctuation=True)
+results = t.transcribe(["a.wav", "b.wav"], language="en", punctuation=True, max_new_tokens=256)
 
 # Qwen supports contextual biasing (context) to help with specific jargon/names
 # and word-level timestamps (if initialized with use_forced_aligner=True)
-q = Transcriber(model="qwen", device="cuda")
-results = q.transcribe("audio.wav", context="acronyms, product names, speaker names", return_timestamps=True)
+q = Transcriber(model="qwen", device="cuda", max_new_tokens=256)
+results = q.transcribe(
+    "audio.wav",
+    context="acronyms, product names, speaker names",
+    return_timestamps=True,
+)
 
 # Disable progress spinner
 results = t.transcribe("audio.wav", language="en", show_progress=False)
