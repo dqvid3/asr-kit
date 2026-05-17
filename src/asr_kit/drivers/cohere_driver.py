@@ -4,6 +4,13 @@ import contextlib
 import io
 
 from asr_kit.drivers.base import BaseDriver
+from asr_kit.drivers.utils import (
+    missing_dependency_error,
+    normalize_language,
+    normalized_result,
+    resolve_torch_device,
+    resolve_torch_dtype,
+)
 from asr_kit.exceptions import ModelLoadError, ModelNotLoadedError
 from asr_kit.types import TranscriptionResult
 
@@ -57,21 +64,9 @@ class CohereDriver(BaseDriver):
             import torch
             from transformers import AutoProcessor, CohereAsrForConditionalGeneration
 
-            if device == "auto":
-                if torch.cuda.is_available():
-                    device = "cuda"
-                elif torch.backends.mps.is_available():
-                    device = "mps"
-                else:
-                    device = "cpu"
-
-            if dtype is None:
-                # Force bfloat16 to avoid -1e9 overflow bug in model's float16 masking code
-                torch_dtype = torch.bfloat16 if device != "cpu" else torch.float32
-            elif isinstance(dtype, str):
-                torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else dtype
-            else:
-                torch_dtype = dtype
+            device = resolve_torch_device(torch, device)
+            # Force bfloat16 to avoid -1e9 overflow bug in model's float16 masking code.
+            torch_dtype = resolve_torch_dtype(torch, dtype, device)
 
             self._model = CohereAsrForConditionalGeneration.from_pretrained(
                 model_id,
@@ -83,6 +78,8 @@ class CohereDriver(BaseDriver):
             self._processor = AutoProcessor.from_pretrained(model_id, token=token)
             self._model_id = model_id
             self._batch_size = 1  # Standard generate works best with batch size 1
+        except ImportError as exc:
+            raise missing_dependency_error("cohere", exc) from exc
         except Exception as exc:
             raise ModelLoadError(f"Failed to load {model_id}: {exc}") from exc
 
@@ -107,8 +104,8 @@ class CohereDriver(BaseDriver):
         # Load all audio files in the batch
         audios = [librosa.load(path, sr=16000)[0] for path in audio_paths]
 
-        # Determine language for the batch
-        batch_lang = language[0] if isinstance(language, list) else language
+        normalized_language = normalize_language(language, "code")
+        batch_lang = normalized_language[0] if isinstance(normalized_language, list) else normalized_language
 
         if batch_lang is None:
             raise ValueError(
@@ -147,14 +144,17 @@ class CohereDriver(BaseDriver):
                 transcriptions = [transcriptions]
 
         for idx, (path, text) in enumerate(zip(audio_paths, transcriptions)):
-            current_lang = language[idx] if isinstance(language, list) else language
+            current_lang = (
+                normalized_language[idx]
+                if isinstance(normalized_language, list)
+                else normalized_language
+            )
             
-            res = TranscriptionResult(
-                text=text.strip(),
+            res = normalized_result(
+                text,
                 audio_path=path,
                 model=self._model_id,
                 language=current_lang,
-                timestamps=None,
             )
             results.append(res)
 

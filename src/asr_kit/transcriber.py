@@ -20,8 +20,8 @@ except ImportError:
 _DRIVER_REGISTRY: dict[str, tuple[str, str]] = {
     "qwen": ("asr_kit.drivers.qwen_driver", "QwenDriver"),
     "cohere": ("asr_kit.drivers.cohere_driver", "CohereDriver"),
+    "parakeet": ("asr_kit.drivers.parakeet_driver", "ParakeetDriver"),
     # "whisper": ("asr_kit.drivers.whisper_driver", "WhisperDriver"),
-    # "parakeet": ("asr_kit.drivers.parakeet_driver", "ParakeetDriver"),
 }
 
 
@@ -40,7 +40,7 @@ class Transcriber:
         """Initialise and load the requested model driver.
 
         Args:
-            model: Model key. Supported: "qwen", "cohere".
+            model: Model key. Supported: "qwen", "cohere", "parakeet".
             **load_kwargs: Passed to the driver's load_model() (device, batch_size, etc.).
 
         Raises:

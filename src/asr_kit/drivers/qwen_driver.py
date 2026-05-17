@@ -4,8 +4,16 @@ import contextlib
 import io
 
 from asr_kit.drivers.base import BaseDriver
+from asr_kit.drivers.utils import (
+    extract_word_timestamps,
+    missing_dependency_error,
+    normalize_language,
+    normalized_result,
+    resolve_torch_device,
+    resolve_torch_dtype,
+)
 from asr_kit.exceptions import ModelLoadError, ModelNotLoadedError
-from asr_kit.types import TranscriptionResult, WordTimestamp
+from asr_kit.types import TranscriptionResult
 
 _DEFAULT_MODEL_ID = "Qwen/Qwen3-ASR-1.7B"
 _DEFAULT_ALIGNER_ID = "Qwen/Qwen3-ForcedAligner-0.6B"
@@ -73,20 +81,8 @@ class QwenDriver(BaseDriver):
 
             transformers.logging.set_verbosity_error()
 
-            if device == "auto":
-                if torch.cuda.is_available():
-                    device = "cuda"
-                elif torch.backends.mps.is_available():
-                    device = "mps"
-                else:
-                    device = "cpu"
-
-            if dtype is None:
-                torch_dtype = torch.bfloat16 if device != "cpu" else torch.float32
-            elif isinstance(dtype, str):
-                torch_dtype = getattr(torch, dtype) if hasattr(torch, dtype) else dtype
-            else:
-                torch_dtype = dtype
+            device = resolve_torch_device(torch, device)
+            torch_dtype = resolve_torch_dtype(torch, dtype, device)
 
             load_kwargs: dict = dict(
                 dtype=torch_dtype,
@@ -110,6 +106,8 @@ class QwenDriver(BaseDriver):
             self._model_id = model_id
             self._aligner_loaded = use_forced_aligner
             self._batch_size = batch_size
+        except ImportError as exc:
+            raise missing_dependency_error("qwen", exc) from exc
         except Exception as exc:
             raise ModelLoadError(f"Failed to load {model_id}: {exc}") from exc
 
@@ -133,25 +131,17 @@ class QwenDriver(BaseDriver):
             raw_chunk = self._model.transcribe(
                 audio=audio_paths,
                 context=context,
-                language=language,
+                language=normalize_language(language, "name"),
                 return_time_stamps=return_timestamps,
                 **kwargs,
             )
         
         for path, item in zip(audio_paths, raw_chunk):
-            timestamps: list[WordTimestamp] | None = None
-            if return_timestamps and item.time_stamps:
-                timestamps = [
-                    WordTimestamp(text=ts.text, start=ts.start_time, end=ts.end_time)
-                    for ts in item.time_stamps
-                ]
-            
-            res = TranscriptionResult(
-                text=item.text,
+            res = normalized_result(
+                item,
                 audio_path=path,
                 model=self._model_id,
-                language=item.language,
-                timestamps=timestamps,
+                timestamps=extract_word_timestamps(item) if return_timestamps else None,
             )
             results.append(res)
 

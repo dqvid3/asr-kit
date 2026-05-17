@@ -14,6 +14,7 @@ dependencies = ["yaspin", "python-dotenv"]
 [project.optional-dependencies]
 qwen = ["qwen-asr", "torch"]
 cohere = ["transformers>=5.4.0", "torch", "soundfile", "librosa", "sentencepiece", "protobuf", "accelerate"]
+parakeet = ["nemo_toolkit[asr]", "torch"]
 dev = ["ruff"]
 
 [tool.setuptools.packages.find]

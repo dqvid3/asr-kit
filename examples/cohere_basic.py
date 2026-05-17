@@ -1,37 +1,24 @@
-"""Basic example of using the Cohere-Transcribe driver."""
+"""Transcribe WAV files with Cohere-Transcribe."""
 
 import argparse
-import sys
+
 from asr_kit import Transcriber
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Transcribe audio with Cohere-Transcribe.")
-    parser.add_argument("audio_paths", nargs="+", help="Path(s) to WAV file(s).")
-    parser.add_argument("--language", required=True, help="Language code (e.g. 'en', 'fr').")
-    parser.add_argument("--device", default="auto", help="Device to use (cuda, cpu, mps).")
-
+    parser.add_argument("files", nargs="+", help="WAV file path(s)")
+    parser.add_argument("--language", required=True, help="Language code (e.g. 'en', 'it', 'fr')")
+    parser.add_argument("--device", default="auto", help="Torch device (auto / cuda / mps / cpu)")
     args = parser.parse_args()
 
-    try:
-        # Initialize transcriber with the 'cohere' model
-        t = Transcriber(model="cohere", device=args.device)
-
-        # Transcribe
-        results = t.transcribe(args.audio_paths, language=args.language)
-
-        # Print results
-        if isinstance(results, list):
-            for res in results:
-                print(f"\n--- {res.audio_path} ---")
-                print(res.text)
-        else:
-            print(f"\n--- {results.audio_path} ---")
-            print(results.text)
-
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    results = Transcriber(model="cohere", device=args.device).transcribe(
+        args.files,
+        language=args.language,
+    )
+    for result in results if isinstance(results, list) else [results]:
+        print(f"\n--- {result.audio_path} ---")
+        print(result.text)
 
 
 if __name__ == "__main__":

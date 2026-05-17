@@ -2,19 +2,19 @@
 
 Modular Python library for Automatic Speech Recognition. Pass WAV(s) to a unified `Transcriber`; get `TranscriptionResult`(s) back. Backed by pluggable model drivers.
 
-**Supported:** Qwen3-ASR | Cohere-Transcribe | Whisper (planned) | Parakeet (planned)
+**Supported:** Qwen3-ASR | Cohere-Transcribe | NVIDIA Parakeet | Whisper (planned)
 
 ## Setup
 
 ```bash
-# Recommended: use one isolated environment per backend model for reproducibility.
-# Create one env per model key (e.g. asr-cohere, asr-qwen).
+# Use one isolated environment per backend model.
+# Create one env per model key (e.g. asr-cohere, asr-qwen, asr-parakeet).
 
 MODEL_KEY=cohere
 conda create -n asr-${MODEL_KEY} python=3.12
 conda activate asr-${MODEL_KEY}
 
-# Optional (NVIDIA GPU): install a CUDA-enabled PyTorch build first.
+# NVIDIA GPU: install a CUDA-enabled PyTorch build first.
 # Use a runtime build published by PyTorch (for example cu124),
 # not necessarily your exact driver version.
 # Recommended (pip wheel):
@@ -22,26 +22,27 @@ conda activate asr-${MODEL_KEY}
 
 pip install "asr-kit[${MODEL_KEY}] @ git+https://github.com/dqvid3/asr-kit.git"
 
-# Optional (Qwen only, Ampere+ GPUs):
+# Optional for Qwen on Ampere+ GPUs:
 pip install -U flash-attn --no-build-isolation
 ```
 
 Available model keys right now:
 - `cohere`
+- `parakeet`
 - `qwen`
 
 Notes:
 - The same install pattern works for new backends as they are added: set `MODEL_KEY` to the backend name.
-- If you switch backend models, prefer a separate environment per model key.
-- Verify GPU setup with: `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"`.
+- Keep backend models in separate environments; their dependency stacks can conflict.
+- Use ISO language codes at the ASR-Kit API boundary, such as `it`, `en`, or `fr`.
+  Drivers translate that to the backend-specific format when needed.
 
 ## Usage
 
 ```python
 from asr_kit import Transcriber
 
-# Initialize (device="mps" for Mac M1/M2/M3)
-# Optional: dtype can be "float16", "bfloat16" (default on GPU), or "float32"
+# Initialize. Use device="mps" on Apple Silicon, or "cuda" on NVIDIA GPUs.
 t = Transcriber(model="cohere", device="mps", dtype="bfloat16")
 
 # Single file → TranscriptionResult
@@ -52,14 +53,20 @@ print(result.text)
 # Cohere uses ISO codes (e.g. "en", "it", "fr") and supports a punctuation toggle
 results = t.transcribe(["a.wav", "b.wav"], language="en", punctuation=True, max_new_tokens=256)
 
-# Qwen supports contextual biasing (context) to help with specific jargon/names
-# and word-level timestamps (if initialized with use_forced_aligner=True)
+# Qwen supports contextual biasing and timestamps when initialized with an aligner.
 q = Transcriber(model="qwen", device="cuda", max_new_tokens=256)
 results = q.transcribe(
     "audio.wav",
+    language="it",
     context="acronyms, product names, speaker names",
     return_timestamps=True,
 )
+
+# Parakeet auto-detects language.
+p = Transcriber(model="parakeet", device="cuda")
+result = p.transcribe("audio.wav", return_timestamps=True)
+print(result.text)
+print(result.language)
 
 # Disable progress spinner
 results = t.transcribe("audio.wav", language="en", show_progress=False)
@@ -84,6 +91,13 @@ Some models (like `Cohere-Transcribe`) are **gated** on Hugging Face. To use the
 | `timestamps` | `list[WordTimestamp] \| None` | Word-level timing (if requested) |
 | `audio_path` | `str` | Absolute source WAV path |
 | `model` | `str` | Model identifier |
+
+## Timestamp Support
+
+`return_timestamps=True` is checked before transcription:
+- `qwen`: requires `Transcriber(model="qwen", use_forced_aligner=True)`
+- `parakeet`: supported by the default v3 model
+- `cohere`: not supported
 
 ## Adding a Driver
 

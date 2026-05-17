@@ -1,33 +1,29 @@
-"""Transcribe WAV files with Qwen3-ASR."""
+"""Transcribe WAV files with NVIDIA Parakeet."""
 
 import argparse
+
 from asr_kit import Transcriber
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Transcribe WAV files with Qwen3-ASR.")
+    parser = argparse.ArgumentParser(description="Transcribe audio with Parakeet.")
     parser.add_argument("files", nargs="+", help="WAV file path(s)")
-    parser.add_argument("--language", help="Language code (e.g. 'en', 'it')")
-    parser.add_argument("--timestamps", action="store_true", help="Include word-level timestamps")
     parser.add_argument("--device", default="auto", help="Torch device (auto / cuda / mps / cpu)")
+    parser.add_argument("--timestamps", action="store_true", help="Include word-level timestamps")
     args = parser.parse_args()
 
-    load_kwargs = {"device": args.device}
-    if args.timestamps:
-        load_kwargs["use_forced_aligner"] = True
-
-    results = Transcriber(model="qwen", **load_kwargs).transcribe(
+    results = Transcriber(model="parakeet", device=args.device).transcribe(
         args.files,
-        language=args.language,
         return_timestamps=args.timestamps,
     )
 
     for result in results if isinstance(results, list) else [results]:
         print(f"\n--- {result.audio_path} ---")
         print(result.text)
+        if result.language:
+            print(f"Language: {result.language}")
         for word in result.timestamps or []:
             print(f"  {word.start:.2f}s - {word.end:.2f}s  {word.text}")
-        print()
 
 
 if __name__ == "__main__":
